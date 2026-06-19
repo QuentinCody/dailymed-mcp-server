@@ -113,7 +113,7 @@ export const dailymedCatalog: ApiCatalog = {
             method: "GET",
             path: "/spls/{setid}.json",
             summary:
-                "Lightweight JSON summary for one SPL (title, labeler, published date, spl_version, packaging/marketing info).",
+                "DO NOT USE — broken upstream. DailyMed serves single-SPL detail ONLY as XML; this .json detail endpoint returns HTTP 415 (Unsupported Media Type) for every Accept header (application/json, */*, none). Use `/spls/{setid}.xml` instead for one SPL's content, or `/spls.json?setid=...` (the LIST endpoint, which does return JSON) for a lightweight summary record. The `.json` suffix only works on LIST endpoints, never on the single-setid detail path.",
             category: "spls",
             pathParams: [
                 {
@@ -123,6 +123,8 @@ export const dailymedCatalog: ApiCatalog = {
                     description: "SPL setid (stable UUID identifier)",
                 },
             ],
+            usageHint:
+                "Unsupported: always 415. For a JSON summary of one label, call `/spls.json?setid={setid}` (list endpoint). For full label content, call `/spls/{setid}.xml`.",
         },
         {
             method: "GET",

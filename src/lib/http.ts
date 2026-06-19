@@ -12,7 +12,12 @@ export interface DailymedFetchOptions extends Omit<RestFetchOptions, "retryOn"> 
  *
  * The v2 services speak two content types:
  *   - .json endpoints → application/json (default Accept header)
- *   - .xml  endpoints → application/xml   (full SPL XML — the differentiator vs openFDA)
+ *   - .xml  endpoints → full SPL XML (the differentiator vs openFDA)
+ *
+ * NOTE: the .xml endpoints reject `Accept: application/xml` with HTTP 406
+ * ("Could not satisfy the request Accept header"); they only return the SPL
+ * when Accept is absent, `* /*`, or `application/json`. So we send `* /*` for
+ * .xml paths and reserve `application/json` for the .json list endpoints.
  *
  * The path suffix is used to choose the Accept header. Callers do not need to
  * pass one explicitly; the adapter strips it back out before the api-proxy
@@ -26,7 +31,7 @@ export async function dailymedFetch(
     const baseUrl = opts?.baseUrl ?? DAILYMED_BASE;
     const isXml = path.toLowerCase().endsWith(".xml");
     const headers: Record<string, string> = {
-        Accept: isXml ? "application/xml" : "application/json",
+        Accept: isXml ? "*/*" : "application/json",
         ...(opts?.headers ?? {}),
     };
 

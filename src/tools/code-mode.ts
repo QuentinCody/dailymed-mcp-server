@@ -23,6 +23,8 @@ export function registerCodeMode(
 
     const executeTool = createExecuteTool({
         prefix: "dailymed",
+        // Verifiable provenance: dailymed_execute results carry a _meta.citation.
+        source: { id: "dailymed", name: "DailyMed", url: "https://dailymed.nlm.nih.gov", license: "U.S. Public Domain" },
         catalog: dailymedCatalog,
         apiFetch,
         doNamespace: env.DAILYMED_DATA_DO,
