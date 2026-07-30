@@ -61,7 +61,7 @@ for (const { path: filePath, required } of toolExpectations) {
 
 const indexContent = readFile('src/index.ts');
 assertContains('src/index.ts', indexContent, 'DailymedDataDO', 'index.ts exports DailymedDataDO');
-assertContains('src/index.ts', indexContent, 'McpAgent', 'index.ts uses McpAgent');
+assertContains('src/index.ts', indexContent, 'StatelessMcpWorker', 'index.ts uses StatelessMcpWorker');
 assertContains('src/index.ts', indexContent, 'registerCodeMode', 'index.ts registers Code Mode tools');
 
 // Catalog must include the overlap-rule sentence from §3.1 of the plan
