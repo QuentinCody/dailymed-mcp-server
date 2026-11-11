@@ -1,6 +1,7 @@
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
 import { createGetSchemaHandler } from "@bio-mcp/shared/staging/utils";
+import { dailymedResponse } from "../lib/tool-result";
 
 interface SchemaEnv {
     DAILYMED_DATA_DO?: unknown;
@@ -9,8 +10,8 @@ interface SchemaEnv {
 export function registerGetSchema(server: McpServer, env?: SchemaEnv): void {
     const handler = createGetSchemaHandler("DAILYMED_DATA_DO", "dailymed");
 
-    server.registerTool(
-        "dailymed_get_schema",
+    for (const name of ["dailymed_get_schema", "mcp_dailymed_get_schema"]) server.registerTool(
+        name,
         {
             title: "Get Staged DailyMed Data Schema",
             description:
@@ -28,11 +29,11 @@ export function registerGetSchema(server: McpServer, env?: SchemaEnv): void {
         },
         async (args, extra) => {
             const runtimeEnv = env || (extra as { env?: SchemaEnv })?.env || {};
-            return handler(
+            return dailymedResponse(()=>handler(
                 args as Record<string, unknown>,
                 runtimeEnv as Record<string, unknown>,
                 (extra as Record<string, unknown>),
-            );
+            ),runtimeEnv,name,extra,args);
         },
     );
 }

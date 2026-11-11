@@ -1,39 +1,47 @@
 import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
 
-/**
- * DailyMed REST API catalog (NLM Structured Product Labeling service, v2).
- *
- * DailyMed is NLM's authoritative repository for FDA SPL content. Unlike
- * openFDA (which re-publishes SPL metadata as flattened JSON), DailyMed
- * serves the full SPL XML including LOINC-sectioned content — boxed
- * warnings, indications, pediatric use, carcinogenesis — verbatim, plus
- * complete supersession history and labels not yet flowed into openFDA.
- *
- * Response formats:
- *   - `.json` endpoints → JSON summary records (parsed to objects)
- *   - `.xml`  endpoints → full SPL XML (kept as TEXT; Code Mode parses
- *     with `DOMParser` in the V8 isolate)
- *
- * See `docs/plans/2026-04-20-biomni-gap-closure-sync-rest.md` §5.5.
- */
+/** DailyMed REST v2. Publication history is paginated; current XML is not an archive selector. */
 export const dailymedCatalog: ApiCatalog = {
     name: "DailyMed (NLM Structured Product Labels)",
     baseUrl: "https://dailymed.nlm.nih.gov/dailymed/services/v2",
     version: "v2",
     auth: "none",
-    endpointCount: 13,
+    endpointCount: 20,
     notes:
-        "Use openfda for quick label-metadata search (brand/generic/pharm class); use dailymed when you need full SPL XML, boxed-warning verbatim text, historical label versions, or labels missing from openFDA.\n" +
-        "\n" +
-        "Response format rules:\n" +
-        "- Endpoints ending in .json return paginated JSON: { data: [...], metadata: { total_elements, total_pages, current_page, next_page_url, previous_page_url } }.\n" +
-        "- Endpoints ending in .xml return the full SPL XML as a TEXT string in the `spl_xml` field of the response data. Parse with `new DOMParser().parseFromString(data.spl_xml, 'application/xml')` inside Code Mode; extract LOINC-sectioned content (boxed warning LOINC 34066-1, indications 34067-9, pediatric use 34081-0, etc.) yourself.\n" +
-        "- Full SPL XML is almost always >30 KB and therefore always stages to the DO — retrieve via `dailymed_query_data` with a SELECT on the `spl_documents` table.\n" +
-        "\n" +
-        "Pagination: all .json list endpoints accept `page` (1-based) and `pagesize` (default 100, max 100) query params.\n" +
-        "\n" +
-        "Stable identifiers: `setid` identifies a label across all its versions; `spl_version` increments per revision. Use `/spls/{setid}/history.json` to walk the supersession chain.",
+        "Use openfda for quick label-metadata search; use dailymed for full SPL XML, boxed-warning verbatim text, historical label versions and publication history. " +
+        "JSON lists preserve data and metadata; history has data.history and data.spl. page is 1-based, pagesize <=100. " +
+        "Current SPL XML returns spl_xml plus document_id, setid, spl_version, raw effective_time and byte SHA-256. expected_spl_version/expected_xml_sha256 are local guards, not archive selectors. " +
+        "Responses >30 KiB stage. If api.get returns __staged, retain its handle; inspect get_schema and the staging envelope for lossless tables instead of assuming spl_documents exists. " +
+        "DOMParser is not built into Code Mode. Do not use regex to infer absent clinical sections or silently truncate warnings. " +
+        "The local timeline helper preserves native history pages and unknown dates, bounds pagination, and selects publication revisions in an inclusive interval. " +
+        "DailyMed publication date, SPL effectiveTime, retrieval time and FDA approval date are different. Revision dates do not prove a clinical/safety change. " +
+        "Local /labels/{setid}/archives reads one native archive-listing page through a date; /labels/{setid}/archive reads the documented setid/version ZIP or an explicit archive ID and verifies XML identity and optional hashes. The documented version route can return 404 for inactive labels whose archive-ID downloads still work. " +
+        "Legacy /rxcuis/{id}.json, /ndcs/{id}.json and /pharmacologicclasses/{code}.json are local aliases for filtered /spls.json lists; /pharmacologicclasses.json aliases /drugclasses.json. These are not native detail resources. " +
+        "October 2026 native /drugclasses filters returned HTTP 500 while unfiltered paging worked. Retain native errors; do not silently drop filters. For /spls drug-class joins, pass the codingSystem observed with each code; current responses used 2.16.840.1.113883.6.345, distinct from the older documented default. " +
+        "No new 2026 API operation was verified: dated search was documented in 2015 and history in 2014.",
     endpoints: [
+        {method:"GET",path:"/labels/{setid}/archives",category:"archives",featured:true,
+            summary:"Discover one native archive page through a publication date, retaining original HTML and retrieval checksum.",
+            description:"Local view of the DailyMed Labeling Archives website. Results are candidates, not a unique as-of label; XML identity must be checked separately. Explicit through avoids the website's current-year default. Returns five candidates per page, native continuation and source_html; large pages stage with archive_candidates and archive_pages tables.",
+            pathParams:[{name:"setid",type:"string",required:true,description:"Exact SPL set UUID; listing query context, not verified document identity."}],
+            queryParams:[{name:"through",type:"string",required:true,description:"Inclusive native archive-date filter YYYY-MM-DD; observed site returns older revisions as well."},{name:"page",type:"number",required:false,description:"Positive page number, default 1. One page per request; inspect native continuation."}],
+            example:"return await api.get('/labels/e9481622-7cc6-418a-acb6-c5450daae9b0/archives',{through:'2025-05-01',page:1});"},
+        {method:"GET",path:"/labels/{setid}/archive",category:"archives",featured:true,
+            summary:"Retrieve a historical SPL by exact setid/version or observed archive ID, verifying ZIP CRC32 and original XML/ZIP SHA-256.",
+            description:"Local adapter reads documented getFile.cfm?type=zip&setid=...&version=... by default. Optional archive_id uses getArchivalFile.cfm instead; this is needed for some inactive labels where the version route returns 404. No automatic fallback. Accepts a complete <=8 MiB ZIP with one XML member; retains full XML and member metadata. Images are listed, not extracted. Join publication date from exact setid/version history; effectiveTime is distinct.",
+            pathParams:[{name:"setid",type:"string",required:true,description:"Expected stable SPL set UUID."}],
+            queryParams:[{name:"archive_id",type:"string",required:false,description:"Optional observed archive ID selects getArchivalFile; omit to use documented setid/version download."},{name:"expected_spl_version",type:"string",required:true,description:"Exact positive version string observed in listing/history; selects the direct download and verifies XML in both modes."},{name:"expected_xml_sha256",type:"string",required:false,description:"Optional original XML-byte SHA-256 guard."},{name:"expected_archive_sha256",type:"string",required:false,description:"Optional complete ZIP-byte SHA-256 guard."}],
+            responseShape:"{spl_xml,setid,document_id,spl_version,effective_time,archive_id,archive_members,_dailymed:{archive_sha256,xml_sha256,xml_member,member_crc32_verified:true,historical_snapshot:true,publication_date:null}}",
+            usageHint:"Check __staged/__api_error/__stage_error before fields. Retain full payloads and spl_documents XML for offline compare_spl.py; ZIP identity and section changes do not establish clinical significance."},
+        {method: "GET", path: "/labels/{setid}/timeline", category: "spls", featured: true,
+            summary: "Local dated publication-history selection with native pages, baseline candidates and explicit completeness. Fetches at most 10 history pages; does not retrieve archived XML or prove text changes.",
+            pathParams: [{name: "setid", type: "string", required: true, description: "Stable SPL set UUID."}],
+            queryParams: [
+                {name: "since", type: "string", required: true, description: "Inclusive publication interval start YYYY-MM-DD."},
+                {name: "until", type: "string", required: true, description: "Inclusive publication interval end YYYY-MM-DD."},
+                {name: "max_pages", type: "number", required: false, description: "Local 1–10 page cap; default 5, 100 records per page. Incomplete histories do not yield baseline candidates."},
+                {name: "expected_db_published_date", type: "string", required: false, description: "Local exact raw metadata.db_published_date check, if previously observed. Not a snapshot selector."},
+            ]},
         {
             method: "GET",
             path: "/spls.json",
@@ -130,7 +138,7 @@ export const dailymedCatalog: ApiCatalog = {
             method: "GET",
             path: "/spls/{setid}.xml",
             summary:
-                "FULL SPL XML — the differentiator vs openFDA. Contains LOINC-sectioned content (boxed warning 34066-1, indications 34067-9, dosage 34068-7, pediatric use 34081-0, pregnancy 42228-3, etc.) verbatim. Always staged (typically 50 KB – 5 MB); retrieve the XML text with `dailymed_query_data` on the `spl_documents` table. Parse client-side with `DOMParser` in the V8 isolate.",
+                "Current full SPL XML with parsed document identity and SHA-256. Large results stage; current version guards fail if the requested older version is no longer current.",
             category: "spls",
             pathParams: [
                 {
@@ -140,15 +148,18 @@ export const dailymedCatalog: ApiCatalog = {
                     description: "SPL setid (stable UUID identifier)",
                 },
             ],
-            usageHint:
-                "The response envelope exposes `{ content_type: 'application/xml', spl_xml, setid, length }`. Stage always fires; query the `spl_documents` table and parse the `spl_xml` column with DOMParser to walk LOINC <section> nodes.",
+            queryParams: [
+                {name: "expected_spl_version", type: "string", required: false, description: "Local exact SPL version guard. Does not retrieve old revisions."},
+                {name: "expected_xml_sha256", type: "string", required: false, description: "Local SHA-256 check on original UTF-8 response bytes."},
+            ],
+            usageHint: "Preserve spl_xml and _dailymed provenance. If staged, retain the handle and inspect get_schema; do not assume XML is inline. Use the offline compare_spl.py script with two verified same-setid files for section differences.",
             featured: true,
         },
         {
             method: "GET",
             path: "/spls/{setid}/history.json",
             summary:
-                "Version / supersession history for one SPL — returns every spl_version with published_date, allowing reconstruction of the label revision timeline.",
+                "One page of SPL revision history: data.history has spl_version/published_date, data.spl identifies the label, and metadata controls continuation. Use the local timeline helper for bounded dated selection.",
             category: "spls",
             pathParams: [
                 {
@@ -158,11 +169,15 @@ export const dailymedCatalog: ApiCatalog = {
                     description: "SPL setid (stable UUID identifier)",
                 },
             ],
+            queryParams: [
+                {name: "page", type: "number", required: false, description: "1-based history page."},
+                {name: "pagesize", type: "number", required: false, description: "History records per page, maximum 100."},
+            ],
         },
         {
             method: "GET",
             path: "/rxcuis.json",
-            summary: "Paginated RxCUI list. Filter by RxNorm concept, drug name, or NDC.",
+            summary: "Paginated product-level RxCUI list; filters are rxcui, rxstring and rxtty.",
             category: "rxcuis",
             queryParams: [
                 {
@@ -170,12 +185,6 @@ export const dailymedCatalog: ApiCatalog = {
                     type: "string",
                     required: false,
                     description: "Filter by specific RxCUI",
-                },
-                {
-                    name: "drug_name",
-                    type: "string",
-                    required: false,
-                    description: "Filter by drug name",
                 },
                 {
                     name: "rxstring",
@@ -188,7 +197,7 @@ export const dailymedCatalog: ApiCatalog = {
                     type: "string",
                     required: false,
                     description:
-                        "Filter by RxNorm term type (SCD, SBD, GPCK, BPCK, IN, PIN, MIN, BN, …)",
+                        "Filter by product-level RxNorm term type: PSN, SBD, SCD, BPCK, GPCK or SY.",
                 },
                 {
                     name: "page",
@@ -208,7 +217,7 @@ export const dailymedCatalog: ApiCatalog = {
             method: "GET",
             path: "/rxcuis/{rxcui}.json",
             summary:
-                "SPLs linked to one RxCUI — map from RxNorm concept to every label that references it.",
+                "Local compatibility alias for /spls.json?rxcui=...; returns one page of labels, not a native RxCUI detail record.",
             category: "rxcuis",
             pathParams: [
                 {
@@ -222,27 +231,9 @@ export const dailymedCatalog: ApiCatalog = {
         {
             method: "GET",
             path: "/ndcs.json",
-            summary: "Paginated NDC list. Filter by NDC, drug name, or labeler.",
+            summary: "Paginated native NDC list; only page/pagesize are documented. Use /spls.json?ndc=... for label lookup.",
             category: "ndcs",
             queryParams: [
-                {
-                    name: "ndc",
-                    type: "string",
-                    required: false,
-                    description: "Filter by National Drug Code (hyphenated or not)",
-                },
-                {
-                    name: "drug_name",
-                    type: "string",
-                    required: false,
-                    description: "Filter by drug name",
-                },
-                {
-                    name: "labeler",
-                    type: "string",
-                    required: false,
-                    description: "Filter by labeler / manufacturer name",
-                },
                 {
                     name: "page",
                     type: "number",
@@ -260,7 +251,7 @@ export const dailymedCatalog: ApiCatalog = {
         {
             method: "GET",
             path: "/ndcs/{ndc}.json",
-            summary: "SPL(s) linked to one NDC — accepts hyphenated or stripped NDC.",
+            summary: "Local compatibility alias for /spls.json?ndc=...; returns one page of labels, not a native NDC detail record.",
             category: "ndcs",
             pathParams: [
                 {
@@ -346,7 +337,7 @@ export const dailymedCatalog: ApiCatalog = {
             category: "uniis",
             queryParams: [
                 {
-                    name: "unii",
+                    name: "unii_code",
                     type: "string",
                     required: false,
                     description: "Filter by specific UNII",
@@ -375,7 +366,7 @@ export const dailymedCatalog: ApiCatalog = {
             method: "GET",
             path: "/pharmacologicclasses.json",
             summary:
-                "Paginated list of pharmacologic classes (EPC, MoA, PE, CS) referenced in SPLs — useful for finding all labels in a therapeutic class.",
+                "Local compatibility alias for native /drugclasses.json. Legacy class_code maps to drug_class_code and class_type maps to class_code_type; CS is not a documented type.",
             category: "classes",
             queryParams: [
                 {
@@ -395,7 +386,7 @@ export const dailymedCatalog: ApiCatalog = {
                     type: "string",
                     required: false,
                     description: "Filter by class type",
-                    enum: ["EPC", "MoA", "PE", "CS"],
+                    enum: ["epc", "moa", "pe", "ci", "all"],
                 },
                 {
                     name: "page",
@@ -415,7 +406,7 @@ export const dailymedCatalog: ApiCatalog = {
             method: "GET",
             path: "/pharmacologicclasses/{class_code}.json",
             summary:
-                "Detail for one pharmacologic class, including the SPLs that reference it. Complements the listing endpoint for drill-down.",
+                "Local compatibility alias for /spls.json?drug_class_code=...; returns one page of labels, not a class detail record.",
             category: "classes",
             pathParams: [
                 {
@@ -426,59 +417,64 @@ export const dailymedCatalog: ApiCatalog = {
                 },
             ],
         },
+        {method:"GET",path:"/drugclasses.json",category:"classes",summary:"Native paginated drug-class list. Documented filters currently returned HTTP 500; unfiltered paging works. Join code plus codingSystem to /spls.json.",queryParams:[
+            ...["drug_class_code","drug_class_coding_system","class_code_type","class_name","unii_code"].map(name=>({name,type:"string" as const,required:false,description:name==="class_code_type"?"all, epc, moa, pe or ci; defaults to all.":"Native DailyMed filter; preserve coding system with codes."})),
+            ...["page","pagesize"].map(name=>({name,type:"number" as const,required:false,description:"One-based page / records per page (maximum 100)."})),
+        ]},
+        ...["ndcs","media","packaging"].map(resource=>({method:"GET" as const,path:`/spls/{setid}/${resource}.json`,category:"spls",
+            summary:`Native ${resource} for an explicit label set; retain native nested arrays and metadata.`,
+            pathParams:[{name:"setid",type:"string" as const,required:true,description:"Exact SPL set UUID."}],
+            queryParams:["page","pagesize"].map(name=>({name,type:"number" as const,required:false,description:"One-based page / records per page (maximum 100)."})),
+        })),
     ],
     workflows: [
+        {title:"Retrieve a documented historical version",description:"Select an observed publication-history version via the documented ZIP route. A 404 is retained; some inactive labels need an explicit archive ID from the listing instead.",keywords:["archive","version","ZIP"],code:"return await api.get('/labels/e9481622-7cc6-418a-acb6-c5450daae9b0/archive',{expected_spl_version:'29'});"},
+        {title:"Discover dated archive candidates",description:"Retain one provider listing page and source HTML, then inspect archive IDs and versions before downloading. Older revisions also match the through-date filter.",keywords:["archive","historical","date","version"],
+            code:"return await api.get('/labels/e9481622-7cc6-418a-acb6-c5450daae9b0/archives',{through:'2025-05-01',page:1});"},
+        {title:"Read two verified historical revisions",description:"Retrieve two observed archive IDs for one set ID. Keep original XML, ZIP/member hashes and staged handles for offline section comparison; a difference is not a clinical-significance judgment.",keywords:["archive","comparison","revision","temporal","XML"],code:`
+const setid='9aa7140c-012c-4ea6-866d-4732e915dab6';
+const before=await api.get('/labels/'+setid+'/archive',{archive_id:'17238',expected_spl_version:'2'});
+if(before.__api_error||before.__stage_error)return before;
+const after=await api.get('/labels/'+setid+'/archive',{archive_id:'89126',expected_spl_version:'3'});
+if(after.__api_error||after.__stage_error)return after;
+return {setid,before,after,instruction:'Recover complete XML and compare with compare_spl.py using the observed XML SHA-256 values; publication dates come from exact setid/version history.'};`.trim()},
         {
-            title: "Full SPL XML retrieval with boxed-warning extraction",
-            description:
-                "Find all SPLs for a drug by name, pick one, stage the full XML, and extract the boxed-warning section (LOINC 34066-1) client-side.",
-            keywords: [
-                "spl",
-                "xml",
-                "boxed warning",
-                "loinc",
-                "label",
-                "prescribing information",
-            ],
+            title: "Version-checked current SPL XML",
+            description: "Select an explicit label, retain its summary, and reject current XML if its document version changed. Staged XML stays a handle; no regex section extraction.",
+            keywords: ["spl", "xml", "boxed warning", "version", "label"],
             code: `
-// 1. List candidate SPLs
-const list = await api.get('/spls.json', { drug_name: 'ibuprofen', pagesize: 5 });
-const spls = list.data?.data || list.data || [];
-if (!spls.length) return { message: 'No SPLs found' };
-const setid = spls[0].setid;
-
-// 2. Fetch the full SPL XML (always stages — check _staging in the response)
-const xmlResp = await api.get(\`/spls/\${setid}.xml\`);
-// xmlResp.data is { content_type: 'application/xml', spl_xml, setid, length }
-// If staged, retrieve via dailymed_query_data: SELECT spl_xml FROM spl_documents WHERE setid = ?
-
-// 3. Parse in the V8 isolate. DOMParser is not built-in; use a regex for the
-// boxed-warning LOINC block, or surface the XML to the caller for richer parsing.
-const xml = xmlResp.data.spl_xml;
-const boxedWarning = /<section[^>]*>\\s*<code[^>]*code="34066-1"[^>]*\\/>([\\s\\S]*?)<\\/section>/i.exec(xml);
-return { setid, boxed_warning_snippet: boxedWarning ? boxedWarning[0].slice(0, 2000) : null };
+const setid = 'e9481622-7cc6-418a-acb6-c5450daae9b0';
+const summary = await api.get('/spls.json', {setid, pagesize: 100});
+if (summary.__staged || summary.__api_error || summary.__stage_error) return summary;
+const labels = summary.data.filter(row => row.setid.toLowerCase() === setid);
+if (labels.length !== 1) return {summary, error: 'Expected one explicit label; resolve ambiguity first'};
+const xml = await api.get('/spls/' + setid + '.xml', {expected_spl_version: String(labels[0].spl_version)});
+if (xml.__api_error || xml.__stage_error) return xml;
+return {summary, xml, instruction: 'Retain staged handles. Compare full same-setid revisions with a proper XML parser; a missing regex match is not evidence of no warning.'};
 `.trim(),
         },
         {
-            title: "RxCUI → list of label setids",
-            description:
-                "Map from an RxNorm concept to every DailyMed SPL that references it.",
+            title: "RxCUI to label candidates",
+            description: "Retrieve one page of labels associated with a concept, keeping distinct set IDs, versions and paging metadata.",
             keywords: ["rxcui", "rxnorm", "label", "crosswalk"],
+            code: `return await api.get('/spls.json', {rxcui: '1049502', page: 1, pagesize: 100});`,
+        },
+        {
+            title: "Dated publication revisions and baseline candidates",
+            description: "Select revisions between two publication dates and retain potential preceding versions. Follow completeness/unknown-date flags before making temporal claims; retrieve older content from Labeling Archives.",
+            keywords: ["history", "version", "supersession", "timeline", "revision", "dated", "change"],
             code: `
-const r = await api.get('/rxcuis/1049502.json');
-return r.data;
+const timeline = await api.get('/labels/e9481622-7cc6-418a-acb6-c5450daae9b0/timeline', {
+  since: '2025-01-01', until: '2025-05-31', max_pages: 10
+});
+return timeline;
 `.trim(),
         },
         {
-            title: "Walk supersession history",
-            description:
-                "List every version of one label to reconstruct the revision timeline.",
-            keywords: ["history", "version", "supersession", "timeline", "revision"],
-            code: `
-const setid = '595f437d-2729-40bb-9c62-c8ece1f82780';
-const h = await api.get(\`/spls/\${setid}/history.json\`);
-return h.data;
-`.trim(),
+            title: "Discover labels published since a date",
+            description: "One page of current-label candidates with DailyMed publication dates; not a complete change log or all historical revisions in an interval.",
+            keywords: ["published_date", "date", "changes", "label"],
+            code: `return await api.get('/spls.json', {published_date: '2026-09-01', published_date_comparison: 'gte', page: 1, pagesize: 100});`,
         },
     ],
 };

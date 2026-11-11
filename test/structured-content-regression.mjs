@@ -80,12 +80,12 @@ assertContains(
 );
 
 // Base URL sanity check
-const adapterContent = readFile('src/lib/http.ts');
+const adapterContent = readFile('src/lib/http.ts') + readFile('src/lib/read.ts');
 assertContains(
   'src/lib/http.ts',
   adapterContent,
-  'https://dailymed.nlm.nih.gov/dailymed/services/v2',
-  'http.ts points at the DailyMed v2 base URL',
+  'https://dailymed.nlm.nih.gov/dailymed',
+  'public reader fixes the DailyMed origin (v2 routing is covered by executable tests)',
 );
 
 // Minimum endpoint coverage per §5.5: at least 10 endpoints

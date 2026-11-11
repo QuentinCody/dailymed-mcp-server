@@ -1,46 +1,12 @@
-import { restFetch } from "@bio-mcp/shared/http/rest-fetch";
-import type { RestFetchOptions } from "@bio-mcp/shared/http/rest-fetch";
+import {fail} from "./label-history";
+import {publicRead, responseText} from "./read";
 
-const DAILYMED_BASE = "https://dailymed.nlm.nih.gov/dailymed/services/v2";
-
-export interface DailymedFetchOptions extends Omit<RestFetchOptions, "retryOn"> {
-    baseUrl?: string;
-}
-
-/**
- * Fetch from the DailyMed REST API (NLM).
- *
- * The v2 services speak two content types:
- *   - .json endpoints → application/json (default Accept header)
- *   - .xml  endpoints → full SPL XML (the differentiator vs openFDA)
- *
- * NOTE: the .xml endpoints reject `Accept: application/xml` with HTTP 406
- * ("Could not satisfy the request Accept header"); they only return the SPL
- * when Accept is absent, `* /*`, or `application/json`. So we send `* /*` for
- * .xml paths and reserve `application/json` for the .json list endpoints.
- *
- * The path suffix is used to choose the Accept header. Callers do not need to
- * pass one explicitly; the adapter strips it back out before the api-proxy
- * routes the request through the V8 isolate's `api.get()`.
- */
-export async function dailymedFetch(
-    path: string,
-    params?: Record<string, unknown>,
-    opts?: DailymedFetchOptions,
-): Promise<Response> {
-    const baseUrl = opts?.baseUrl ?? DAILYMED_BASE;
-    const isXml = path.toLowerCase().endsWith(".xml");
-    const headers: Record<string, string> = {
-        Accept: isXml ? "*/*" : "application/json",
-        ...(opts?.headers ?? {}),
-    };
-
-    return restFetch(baseUrl, path, params, {
-        ...opts,
-        headers,
-        retryOn: [429, 500, 502, 503, 504],
-        retries: opts?.retries ?? 3,
-        timeout: opts?.timeout ?? 45_000,
-        userAgent: "dailymed-mcp-server/1.0 (bio-mcp)",
-    });
+const safePath = /^\/(?:[a-z]+\.(?:json|xml)|(?:spls|rxcuis|ndcs|pharmacologicclasses)\/[a-zA-Z\d_-]+(?:\/(?:history|ndcs|packaging|media))?\.(?:json|xml))$/;
+export async function dailymedRead(path: string, params: Record<string, unknown>, deadline = Date.now() + 45_000) {
+  if (!safePath.test(path)) fail("Unsupported DailyMed path");
+  const filters:Record<string,string[]>={rxcuis:["rxcui","rxstring","rxtty"],ndcs:[],drugclasses:["drug_class_code","drug_class_coding_system","class_code_type","class_name","unii_code"],uniis:["active_moiety","drug_class_code","drug_class_coding_system","rxcui","unii_code"]};
+  const resource=/^\/([a-z]+)\.(?:json|xml)$/.exec(path)?.[1];
+  if(resource && filters[resource])for(const key of Object.keys(params))if(!["page","pagesize",...filters[resource]].includes(key))fail(`Unsupported ${resource} filter: ${key}; use documented filters or /spls.json for label lookup`);
+  const result = await publicRead("/services/v2" + path,params,deadline,path.endsWith(".xml")?"*/*":"application/json");
+  return {...result,text:responseText(result)};
 }
