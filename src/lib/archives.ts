@@ -57,7 +57,7 @@ export async function readArchives(setid: string, params: Record<string,unknown>
 }
 
 export async function readArchivedSpl(setid: string, params: Record<string,unknown>) {
-  let { result, members, observed_xml }: { result: { raw: Uint8Array<ArrayBufferLike>; source_url: string; receipt: { source_url: string; retrieved_at: string; http_status: number; bytes: number; response_sha256: string; content_type: string | null; }; }; members: import("/Users/quentincody/mcp-client-bio/servers/dailymed-mcp-server/src/lib/archive-zip").ArchiveMember[]; observed_xml: { spl_xml: string; xml_sha256: string; } | undefined; } = await readArchiveDownload(setid, params);
+  let { result, members, observed_xml }: { result: { raw: Uint8Array<ArrayBufferLike>; source_url: string; receipt: { source_url: string; retrieved_at: string; http_status: number; bytes: number; response_sha256: string; content_type: string | null; }; }; members: import("./archive-zip").ArchiveMember[]; observed_xml: { spl_xml: string; xml_sha256: string; } | undefined; } = await readArchiveDownload(setid, params);
   try {
     if (params.expected_archive_sha256!==undefined && String(params.expected_archive_sha256).toLowerCase()!==result.receipt.response_sha256) fail("DailyMed archive checksum differs from expected_archive_sha256",409);
     members=zipMembers(result.raw);const xmls=members.filter(member=>member.name.toLowerCase().endsWith(".xml"));
